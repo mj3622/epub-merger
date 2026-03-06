@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EPUB Merger — 合并电子书</title>
+  <meta name="description" content="纯浏览器端 EPUB 合并工具：上传多本 EPUB，调整顺序，编辑元数据，一键下载合并结果。" />
+  <link rel="stylesheet" href="style.css" />
+  <!-- JSZip: read/write ZIP (EPUB) files -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <!-- SortableJS: drag-to-reorder -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+</head>
+
+<body>
+
+  <div class="container">
+
+    <!-- Header -->
+    <header class="header">
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme" title="切换暗色/亮色模式">🌙</button>
+      <div class="logo">
+        <div class="logo-icon">📚</div>
+        <h1>EPUB Merger</h1>
+      </div>
+      <p>在浏览器中合并多本 EPUB 电子书 · 编辑元数据 · 一键下载</p>
+    </header>
+
+    <!-- Drop Zone -->
+    <div id="drop-zone" role="button" tabindex="0" aria-label="上传 EPUB 文件">
+      <span class="drop-icon">📖</span>
+      <div class="drop-title">拖拽 EPUB 文件到此处</div>
+      <div class="drop-subtitle">支持同时添加多个文件，已添加的文件也可继续追加</div>
+      <button class="drop-btn" id="browse-btn" type="button">选择文件</button>
+      <input type="file" id="file-input" accept=".epub" multiple />
+    </div>
+
+    <!-- Book List -->
+    <section id="book-list-section">
+      <div class="card">
+        <div class="book-list-header">
+          <span class="section-title">已添加的书籍</span>
+          <span class="book-count" id="book-count">0 本</span>
+        </div>
+        <p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:14px;">
+          ☰ 拖拽左侧图标可调整合并顺序
+        </p>
+        <div id="book-list" role="list" aria-label="书籍列表"></div>
+      </div>
+    </section>
+
+    <!-- Metadata Editor -->
+    <section id="metadata-section">
+      <div class="card">
+        <p class="section-title">合并元数据</p>
+        <div class="form-grid">
+          <div>
+            <label class="field-label" for="meta-title">书名 *</label>
+            <input class="field-input" id="meta-title" type="text" placeholder="合并后的书名" />
+          </div>
+          <div>
+            <label class="field-label" for="meta-author">作者</label>
+            <input class="field-input" id="meta-author" type="text" placeholder="作者姓名" />
+          </div>
+          <div>
+            <label class="field-label" for="meta-language">语言</label>
+            <select class="field-input" id="meta-language">
+              <option value="zh">中文 (zh)</option>
+              <option value="en">English (en)</option>
+              <option value="ja">日本語 (ja)</option>
+              <option value="ko">한국어 (ko)</option>
+              <option value="fr">Français (fr)</option>
+              <option value="de">Deutsch (de)</option>
+              <option value="es">Español (es)</option>
+              <option value="ru">Русский (ru)</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="meta-publisher">出版商</label>
+            <input class="field-input" id="meta-publisher" type="text" placeholder="出版商（可选）" />
+          </div>
+          <div class="form-full">
+            <label class="field-label">封面图片</label>
+            <div class="cover-picker">
+              <div id="cover-preview">🖼️</div>
+              <div class="cover-picker-right">
+                <label class="field-label" for="cover-source" style="margin-bottom:6px;">选择封面来源</label>
+                <select class="field-input" id="cover-source">
+                  <option value="">— 不设封面 —</option>
+                </select>
+                <p style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;">
+                  可在上方下拉框中自由选择任一本书作为合并后的封面
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Action Bar -->
+    <section id="action-section">
+      <div class="action-bar">
+        <button class="btn btn-secondary" id="clear-btn" type="button">🗑 清空列表</button>
+        <button class="btn btn-primary" id="merge-btn" type="button" aria-label="合并并下载 EPUB">
+          ✨ 合并并下载
+        </button>
+      </div>
+      <div id="progress-section">
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" id="progress-fill"></div>
+        </div>
+        <p class="progress-text" id="progress-text">准备中…</p>
+      </div>
+    </section>
+
+  </div>
+
+  <div id="toast" role="alert" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
