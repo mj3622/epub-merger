@@ -1,6 +1,6 @@
 # EPUB Merger
 
-一个**纯静态（前端）**的 EPUB 电子书合并工具。所有的数据解析、压缩、重新生成都在您的浏览器内存中完成，**不依赖任何后端服务器，保证您的数据隐私与安全**。
+一个 **纯静态（前端）** 的 EPUB 电子书合并工具。所有的数据解析、压缩、重新生成都在您的浏览器内存中完成，**不依赖任何后端服务器，保证您的数据隐私与安全**。
 
 在线使用：[https://epub-merger.minjer.top](https://epub-merger.minjer.top)
 
@@ -31,11 +31,3 @@
 - **Vanilla JavaScript** (无框架，零包袱)
 - [**JSZip**](https://stuk.github.io/jszip/)：在浏览器中读取、创建、编辑 ZIP (EPUB) 档案。
 - [**SortableJS**](https://sortablejs.github.io/Sortable/)：提供丝滑的拖拽重排序体验。
-
-## 📝 贡献 (Contributing)
-
-欢迎提交 Issues 和 Pull Requests 来完善此项目！
-
-## 📄 许可证 (License)
-
-MIT License.
