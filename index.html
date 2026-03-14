@@ -81,6 +81,19 @@
             <input class="field-input" id="meta-publisher" type="text" placeholder="出版商（可选）" />
           </div>
           <div class="form-full">
+            <label class="field-label" for="toc-book-title-mode">目录一级标题模式</label>
+            <select class="field-input" id="toc-book-title-mode">
+              <option value="merged-title-index">合并后书名 + 序号</option>
+              <option value="custom">自定义（默认原标题）</option>
+            </select>
+            <div id="toc-custom-titles-wrap" style="display:none; margin-top:10px;">
+              <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px;">
+                为每本书设置目录中的一级标题（未填写时回退到原标题）
+              </p>
+              <div id="toc-custom-titles-list"></div>
+            </div>
+          </div>
+          <div class="form-full">
             <label class="field-label">封面图片</label>
             <div class="cover-picker">
               <div id="cover-preview">🖼️</div>

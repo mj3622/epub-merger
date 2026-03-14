@@ -17,6 +17,9 @@ const toastEl = $('#toast');
 const coverSourceSelect = $('#cover-source');
 const coverPreview = $('#cover-preview');
 const themeToggleBtn = $('#theme-toggle');
+const tocBookTitleModeSelect = $('#toc-book-title-mode');
+const tocCustomTitlesWrap = $('#toc-custom-titles-wrap');
+const tocCustomTitlesList = $('#toc-custom-titles-list');
 
 const progressSection = $('#progress-section');
 const progressFill = $('#progress-fill');
@@ -26,7 +29,7 @@ let books = []; // Array of Book objects
 let sortableInstance = null;
 
 // Book structure:
-// { id, file, zip, title, author, coverBlobUrl, opfPath, manifest, spine, isLoaded: false }
+// { id, file, zip, title, author, coverBlobUrl, opfPath, manifest, spine, isLoaded: false, tocCustomTitle, tocCustomTitleEdited }
 
 // Toast Notification
 function showToast(msg, type = "success") {
@@ -98,7 +101,9 @@ async function handleFiles(fileList) {
       opfPath: '',
       manifest: [],
       spine: [],
-      isLoaded: false
+      isLoaded: false,
+      tocCustomTitle: file.name,
+      tocCustomTitleEdited: false
     };
     books.push(book);
     renderBookItem(book);
@@ -123,7 +128,7 @@ function updateUIState() {
       metaTitle.dataset.auto = "true";
     }
 
-    if (books.length === 1 && !sortableInstance) {
+    if (!sortableInstance) {
       sortableInstance = new Sortable(bookListEl, {
         animation: 150,
         handle: '.drag-handle',
@@ -133,6 +138,7 @@ function updateUIState() {
           let newOrder = Array.from(bookListEl.children).map(el => el.dataset.id);
           books = newOrder.map(id => books.find(b => b.id === id));
           updateBookOrderNumbers();
+          renderTocCustomTitleInputs();
           updateCoverSelect();
           updateCoverPreview();
         }
@@ -149,6 +155,8 @@ function updateUIState() {
     $('#meta-title').value = '';
     $('#meta-title').dataset.auto = "true";
   }
+  renderTocCustomTitleInputs();
+  updateTocCustomTitlesVisibility();
   updateCoverSelect();
   updateCoverPreview();
 }
@@ -192,6 +200,36 @@ function updateBookOrderNumbers() {
   });
 }
 
+function renderTocCustomTitleInputs() {
+  if (!tocCustomTitlesList) return;
+  tocCustomTitlesList.innerHTML = '';
+  books.forEach((book, index) => {
+    let row = document.createElement('div');
+    row.className = 'toc-custom-title-item';
+    let indexEl = document.createElement('div');
+    indexEl.className = 'toc-custom-title-index';
+    indexEl.textContent = `第 ${index + 1} 本`;
+    let input = document.createElement('input');
+    input.className = 'field-input';
+    input.type = 'text';
+    input.dataset.bookId = book.id;
+    input.placeholder = book.title || '';
+    input.value = book.tocCustomTitle || '';
+    input.addEventListener('input', () => {
+      book.tocCustomTitle = input.value;
+      book.tocCustomTitleEdited = true;
+    });
+    row.appendChild(indexEl);
+    row.appendChild(input);
+    tocCustomTitlesList.appendChild(row);
+  });
+}
+
+function updateTocCustomTitlesVisibility() {
+  if (!tocBookTitleModeSelect || !tocCustomTitlesWrap) return;
+  tocCustomTitlesWrap.style.display = tocBookTitleModeSelect.value === 'custom' ? 'block' : 'none';
+}
+
 function resolvePath(basePath, relativePath) {
   if (!basePath) return relativePath;
   let parts = basePath.split('/');
@@ -209,6 +247,249 @@ function resolvePath(basePath, relativePath) {
 function getDirName(path) {
   if (!path.includes('/')) return '';
   return path.substring(0, path.lastIndexOf('/'));
+}
+
+function escapeXml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function sanitizeManifestProperties(properties = '') {
+  if (!properties) return '';
+  // Keep source-specific rendering hints, but remove properties that must stay unique in merged book.
+  let blocked = new Set(['cover-image', 'nav']);
+  let kept = properties
+    .split(/\s+/)
+    .map(token => token.trim())
+    .filter(Boolean)
+    .filter(token => !blocked.has(token));
+  return kept.join(' ');
+}
+
+function getTagChildren(parent, localName) {
+  return Array.from(parent.children || []).filter(el => el.localName === localName);
+}
+
+function toMergedHrefFromZipPath(prefix, zipPath) {
+  let merged = `${prefix}/${zipPath.split('/').map(encodeURIComponent).join('/')}`;
+  return decodeURIComponent(merged);
+}
+
+function buildMergedHref(prefix, baseZipPath, rawHref) {
+  if (!rawHref) return null;
+  let hashIndex = rawHref.indexOf('#');
+  let pathPart = hashIndex >= 0 ? rawHref.slice(0, hashIndex) : rawHref;
+  let fragment = hashIndex >= 0 ? rawHref.slice(hashIndex + 1) : '';
+  let resolvedZipPath = pathPart ? resolvePath(baseZipPath, pathPart) : baseZipPath;
+  let mergedPath = toMergedHrefFromZipPath(prefix, resolvedZipPath);
+  return fragment ? `${mergedPath}#${fragment}` : mergedPath;
+}
+
+function parseNavLiNode(liEl, navZipPath, prefix) {
+  let childElements = Array.from(liEl.children || []);
+  let anchorEl = childElements.find(el => el.localName === 'a');
+  let textEl = anchorEl || childElements.find(el => el.localName === 'span' || el.localName === 'div');
+  let title = (textEl ? textEl.textContent : liEl.textContent || '').trim();
+  let href = anchorEl ? buildMergedHref(prefix, navZipPath, anchorEl.getAttribute('href')) : null;
+  let childOl = childElements.find(el => el.localName === 'ol');
+  let children = childOl
+    ? getTagChildren(childOl, 'li').map(li => parseNavLiNode(li, navZipPath, prefix)).filter(Boolean)
+    : [];
+  if (!title && !href && children.length === 0) return null;
+  return {
+    title: title || '未命名章节',
+    href,
+    children
+  };
+}
+
+async function parseBookNavToc(book, prefix) {
+  // First try to find nav item by properties="nav"
+  let navItem = book.manifest.find(item =>
+    item.mediaType === "application/xhtml+xml" &&
+    item.properties.split(/\s+/).includes("nav")
+  );
+  
+  // Fallback: try to find by id containing "nav" or "toc"
+  if (!navItem) {
+    navItem = book.manifest.find(item =>
+      item.mediaType === "application/xhtml+xml" &&
+      ((item.id || '').toLowerCase().includes('nav') || (item.id || '').toLowerCase().includes('toc'))
+    );
+  }
+  
+  if (!navItem) return [];
+  let opfDir = getDirName(book.opfPath);
+  let navZipPath = opfDir ? `${opfDir}/${navItem.href}` : navItem.href;
+  let navFile = book.zip.file(navZipPath);
+  if (!navFile) return [];
+  let navXml = await navFile.async("string");
+  let parser = new DOMParser();
+  let navDoc = parser.parseFromString(navXml, "application/xhtml+xml");
+  let navEls = Array.from(navDoc.getElementsByTagName('*')).filter(el => el.localName === 'nav');
+  let tocNav = navEls.find(el => {
+    let epubType = (el.getAttribute('epub:type') || el.getAttribute('type') || '').split(/\s+/);
+    return epubType.includes('toc');
+  }) || navEls[0];
+  if (!tocNav) return [];
+  let tocOl = getTagChildren(tocNav, 'ol')[0];
+  if (!tocOl) return [];
+  return getTagChildren(tocOl, 'li').map(li => parseNavLiNode(li, navZipPath, prefix)).filter(Boolean);
+}
+
+function parseNcxNavPoint(navPointEl, ncxZipPath, prefix) {
+  let labelText = '';
+  let navLabel = getTagChildren(navPointEl, 'navLabel')[0];
+  if (navLabel) {
+    let textEl = getTagChildren(navLabel, 'text')[0];
+    if (textEl) labelText = (textEl.textContent || '').trim();
+  }
+  let contentEl = getTagChildren(navPointEl, 'content')[0];
+  let src = contentEl ? contentEl.getAttribute('src') : '';
+  let href = src ? buildMergedHref(prefix, ncxZipPath, src) : null;
+  let children = getTagChildren(navPointEl, 'navPoint').map(child => parseNcxNavPoint(child, ncxZipPath, prefix)).filter(Boolean);
+  if (!labelText && !href && children.length === 0) return null;
+  return {
+    title: labelText || '未命名章节',
+    href,
+    children
+  };
+}
+
+async function parseBookNcxToc(book, prefix) {
+  // More comprehensive search for NCX file
+  let ncxItem = book.manifest.find(item =>
+    item.mediaType === "application/x-dtbncx+xml" || 
+    (item.href || '').toLowerCase().endsWith('.ncx') ||
+    (item.id || '').toLowerCase().includes('toc')
+  );
+  if (!ncxItem) return [];
+  let opfDir = getDirName(book.opfPath);
+  let ncxZipPath = opfDir ? `${opfDir}/${ncxItem.href}` : ncxItem.href;
+  let ncxFile = book.zip.file(ncxZipPath);
+  if (!ncxFile) return [];
+  let ncxXml = await ncxFile.async("string");
+  let parser = new DOMParser();
+  let ncxDoc = parser.parseFromString(ncxXml, "text/xml");
+  let navMap = Array.from(ncxDoc.getElementsByTagName('*')).find(el => el.localName === 'navMap');
+  if (!navMap) return [];
+  return getTagChildren(navMap, 'navPoint').map(point => parseNcxNavPoint(point, ncxZipPath, prefix)).filter(Boolean);
+}
+
+async function extractBookTocNodes(book, prefix) {
+  console.log(`extractBookTocNodes: book.title=${book.title}, prefix=${prefix}, hasZip=!!${book.zip}, manifest.length=${book.manifest?.length}`);
+  
+  // First try: search in manifest for nav.xhtml
+  let navNodes = await parseBookNavToc(book, prefix);
+  if (navNodes.length > 0) {
+    console.log(`  Found nav via parseBookNavToc: ${navNodes.length} nodes`);
+    return navNodes;
+  }
+  
+  // Second try: search in manifest for ncx
+  navNodes = await parseBookNcxToc(book, prefix);
+  if (navNodes.length > 0) {
+    console.log(`  Found nav via parseBookNcxToc: ${navNodes.length} nodes`);
+    return navNodes;
+  }
+  
+  // Third try: direct search in zip files
+  let zipFiles = Object.keys(book.zip.files);
+  console.log(`  zipFiles sample: ${zipFiles.slice(0, 10).join(', ')}`);
+  
+  // Search for nav.xhtml or navi.xhtml
+  let navFileName = zipFiles.find(f => 
+    f.toLowerCase().includes('nav') && f.toLowerCase().endsWith('.xhtml')
+  );
+  console.log(`  Found navFileName: ${navFileName}`);
+  if (navFileName) {
+    let navFile = book.zip.file(navFileName);
+    if (navFile) {
+      let navZipPath = navFileName;
+      let navXml = await navFile.async("string");
+      let parser = new DOMParser();
+      let navDoc = parser.parseFromString(navXml, "application/xhtml+xml");
+      let navEls = Array.from(navDoc.getElementsByTagName('*')).filter(el => el.localName === 'nav');
+      let tocNav = navEls.find(el => {
+        let epubType = (el.getAttribute('epub:type') || el.getAttribute('type') || '').split(/\s+/);
+        return epubType.includes('toc');
+      }) || navEls[0];
+      if (tocNav) {
+        let tocOl = getTagChildren(tocNav, 'ol')[0];
+        if (tocOl) {
+          return getTagChildren(tocOl, 'li').map(li => parseNavLiNode(li, navZipPath, prefix)).filter(Boolean);
+        }
+      }
+    }
+  }
+  
+  // Search for toc.ncx
+  let ncxFileName = zipFiles.find(f => f.toLowerCase().endsWith('.ncx'));
+  console.log(`  Found ncxFileName: ${ncxFileName}`);
+  if (ncxFileName) {
+    let ncxFile = book.zip.file(ncxFileName);
+    if (ncxFile) {
+      let ncxXml = await ncxFile.async("string");
+      let parser = new DOMParser();
+      let ncxDoc = parser.parseFromString(ncxXml, "text/xml");
+      let navMap = Array.from(ncxDoc.getElementsByTagName('*')).find(el => el.localName === 'navMap');
+      if (navMap) {
+        return getTagChildren(navMap, 'navPoint').map(point => parseNcxNavPoint(point, ncxFileName, prefix)).filter(Boolean);
+      }
+    }
+  }
+  
+  return [];
+}
+
+function getBookTopLevelTitle(book, index, finalTitle, mode) {
+  if (mode === 'custom') {
+    return (book.tocCustomTitle || '').trim() || (book.title || '').trim() || `${finalTitle} ${index + 1}`;
+  }
+  return `${finalTitle} ${index + 1}`;
+}
+
+function findFirstHref(node) {
+  if (!node) return '';
+  if (node.href) return node.href;
+  for (let child of node.children || []) {
+    let href = findFirstHref(child);
+    if (href) return href;
+  }
+  return '';
+}
+
+function renderNavListItems(nodes) {
+  return nodes.map(node => {
+    let title = escapeXml(node.title || '未命名章节');
+    let label = node.href
+      ? `<a href="${escapeXml(node.href)}">${title}</a>`
+      : `<span>${title}</span>`;
+    let childHtml = (node.children && node.children.length > 0)
+      ? `\n        <ol>\n          ${renderNavListItems(node.children)}\n        </ol>`
+      : '';
+    return `<li>${label}${childHtml}</li>`;
+  }).join('\n          ');
+}
+
+function buildNcxNavPoints(nodes, playOrder = 1, parentHref = '') {
+  let xml = '';
+  for (let node of nodes) {
+    let currentOrder = playOrder++;
+    let effectiveHref = node.href || findFirstHref(node) || parentHref;
+    let nested = buildNcxNavPoints(node.children || [], playOrder, effectiveHref);
+    playOrder = nested.playOrder;
+    xml += `
+  <navPoint id="navPoint-${currentOrder}" playOrder="${currentOrder}">
+    <navLabel><text>${escapeXml(node.title || '未命名章节')}</text></navLabel>
+    ${effectiveHref ? `<content src="${escapeXml(effectiveHref)}"/>` : ''}
+${nested.xml}  </navPoint>`;
+  }
+  return { xml, playOrder };
 }
 
 async function parseEpubInfo(book) {
@@ -238,6 +519,9 @@ async function parseEpubInfo(book) {
     // Metadata
     let titleEl = opfDoc.querySelector("title");
     if (titleEl) book.title = titleEl.textContent;
+    if (!book.tocCustomTitleEdited) {
+      book.tocCustomTitle = book.title;
+    }
     let creatorEl = opfDoc.querySelector("creator");
     if (creatorEl) book.author = creatorEl.textContent;
     else book.author = "";
@@ -294,6 +578,7 @@ async function parseEpubInfo(book) {
     
     updateCoverSelect();
     updateCoverPreview();
+    renderTocCustomTitleInputs();
     
     if (!($('#meta-title').dataset.auto == "false") && $('#meta-title').value.includes(' 等')) {
        // Optional: Re-eval title if new books parsed
@@ -315,6 +600,10 @@ async function parseEpubInfo(book) {
 $('#meta-title').addEventListener('input', () => {
   $('#meta-title').dataset.auto = "false";
 });
+
+if (tocBookTitleModeSelect) {
+  tocBookTitleModeSelect.addEventListener('change', updateTocCustomTitlesVisibility);
+}
 
 coverSourceSelect.addEventListener('change', updateCoverPreview);
 
@@ -376,6 +665,7 @@ async function startMerge() {
   let finalLang = $('#meta-language').value || "zh";
   let finalPublisher = $('#meta-publisher').value.trim() || "EPUB Merger Offline";
   let selectedCoverBookId = coverSourceSelect.value;
+  let tocBookTitleMode = tocBookTitleModeSelect ? tocBookTitleModeSelect.value : 'merged-title-index';
 
   mergeBtn.disabled = true;
   progressSection.style.display = 'block';
@@ -459,14 +749,8 @@ async function startMerge() {
             newHref = decodeURIComponent(newHref); 
             
             let newId = `${pfx}_${item.id}`;
-            let propsStr = item.properties ? ` properties="${item.properties}"` : '';
-            
-            // Remove cover-image property so we avoid multiple covers if user picked NO cover
-            if (propsStr.includes("cover-image")) {
-                propsStr = propsStr.replace(/cover-image/g, "").trim();
-                if(propsStr) propsStr = ` properties="${propsStr}"`;
-                else propsStr = '';
-            }
+            let sanitizedProps = sanitizeManifestProperties(item.properties || "");
+            let propsStr = sanitizedProps ? ` properties="${sanitizedProps}"` : '';
             
             masterManifest.push(`<item id="${newId}" href="${newHref}" media-type="${item.mediaType}"${propsStr}/>`);
             
@@ -480,35 +764,40 @@ async function startMerge() {
             masterSpine.push(`<itemref idref="${pfx}_${sid}"/>`);
         });
         
-        // Add to Nav
-        if (firstSpineItemHref) {
-            navPoints.push({
-                title: b.title,
-                href: firstSpineItemHref
-            });
-        }
+        // Add to Nav: each book is level-1, original TOC is demoted one level.
+        let bookTocChildren = await extractBookTocNodes(b, pfx);
+        console.log(`Book ${i}: ${b.title}, TOC children count: ${bookTocChildren.length}`);
+        let topLevelTitle = getBookTopLevelTitle(b, i, finalTitle, tocBookTitleMode);
+        let topLevelHref = firstSpineItemHref || findFirstHref(bookTocChildren[0] || null) || null;
+        navPoints.push({
+            title: topLevelTitle,
+            href: topLevelHref,
+            children: bookTocChildren
+        });
     }
     
+    console.log('All navPoints:', JSON.stringify(navPoints.map(np => ({title: np.title, childrenCount: np.children.length})), null, 2));
     setProgress(85, "生成目录...");
     
     // Generate toc.ncx (EPUB 2 backward compatibility)
+    let ncxNavPointsXml = buildNcxNavPoints(navPoints).xml;
+    console.log('NCX navPoints XML length:', ncxNavPointsXml.length);
+    console.log('NCX navPoints XML preview:', ncxNavPointsXml.substring(0, 500));
     let ncxContent = `<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
 <head><meta name="dtb:uid" content="urn:uuid:${Date.now()}"/></head>
-<docTitle><text>${finalTitle}</text></docTitle>
+<docTitle><text>${escapeXml(finalTitle)}</text></docTitle>
 <navMap>
-${navPoints.map((p, idx) => `
-  <navPoint id="navPoint-${idx+1}" playOrder="${idx+1}">
-    <navLabel><text>${p.title}</text></navLabel>
-    <content src="${p.href}"/>
-  </navPoint>
-`).join('')}
+${ncxNavPointsXml}
 </navMap>
 </ncx>`;
     mergedZip.file("toc.ncx", ncxContent);
     masterManifest.push(`<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>`);
 
     // Generate nav.xhtml (EPUB 3)
+    let navListHtml = renderNavListItems(navPoints);
+    console.log('nav.xhtml list HTML FULL:', navListHtml);
+    console.log('nav.xhtml list HTML length:', navListHtml.length);
     let navContent = `<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Table of Contents</title></head>
@@ -516,7 +805,7 @@ ${navPoints.map((p, idx) => `
   <nav epub:type="toc" id="toc">
     <h1>目录</h1>
     <ol>
-      ${navPoints.map(p => `<li><a href="${p.href}">${p.title}</a></li>`).join('\n      ')}
+      ${navListHtml}
     </ol>
   </nav>
 </body>
@@ -526,6 +815,8 @@ ${navPoints.map((p, idx) => `
 
     setProgress(90, "生成 OPF...");
     // Generate Master content.opf
+    console.log('masterSpine items:', masterSpine.slice(0, 5), '... total:', masterSpine.length);
+    console.log('masterManifest items:', masterManifest.slice(0, 5), '... total:', masterManifest.length);
     
     let opfContent = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="pub-id" version="3.0">
@@ -545,8 +836,10 @@ ${navPoints.map((p, idx) => `
         ${masterSpine.join('\n        ')}
     </spine>
 </package>`;
+    console.log('OPF spine section:', opfContent.match(/<spine[\s\S]*?<\/spine>/));
     
     mergedZip.file("content.opf", opfContent);
+    console.log('OPF content (spine + manifest):', opfContent.substring(opfContent.indexOf('<spine'), opfContent.indexOf('</package>')));
 
     setProgress(95, "正在压缩装填...");
 
